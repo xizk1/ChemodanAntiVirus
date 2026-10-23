@@ -1,0 +1,9 @@
+{
+    "suspicious_threshold": 6,
+    "malware_threshold": 12,
+    "auto_quarantine": true,
+    "monitor_interval": 2.0,
+    "max_file_size_mb": 64,
+    "skip_dirs": [ "Windows", "$Recycle.Bin", "System Volume Information", "node_modules", ".git", "__pycache__", "data", "quarantine" ],
+    "malwarebazaar_auth_key": "b6e83bad9ebd4e7af53b566ca2a9a91f93ab8926b7b0ab04"
+}

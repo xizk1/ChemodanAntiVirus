@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 500" width="800" height="500">
+  <!-- Прозрачный фон -->
+  <rect width="800" height="500" fill="transparent" />
+
+  <g transform="translate(400, 180)">
+    <!-- Ручка чемодана -->
+    <path d="M -45 -50 V -80 C -45 -95 -30 -105 -10 -105 H 10 C 30 -105 45 -95 45 -80 V -50" 
+          fill="none" stroke="#1A1A1A" stroke-width="16" stroke-linecap="round" stroke-linejoin="round" />
+
+    <!-- Корпус чемодана -->
+    <rect x="-110" y="-50" width="220" height="180" rx="24" fill="#1A1A1A" />
+
+    <!-- Вертикальные полосы (сделаны с помощью прозрачных линий) -->
+    <line x1="-65" y1="-50" x2="-65" y2="130" stroke="#FFFFFF" stroke-width="8" opacity="0.2" />
+    <line x1="65" y1="-50" x2="65" y2="130" stroke="#FFFFFF" stroke-width="8" opacity="0.2" />
+
+    <!-- Круг с галочкой (в правом нижнем углу) -->
+    <circle cx="70" cy="90" r="50" fill="#1A1A1A" />
+    <circle cx="70" cy="90" r="44" fill="#1A1A1A" stroke="#FFFFFF" stroke-width="4" />
+    <path d="M 50 90 L 63 103 L 90 72" 
+          fill="none" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" />
+  </g>
+
+  <!-- Название -->
+  <g transform="translate(400, 400)">
+    <text x="0" y="0" font-family="'Inter', 'Segoe UI', -apple-system, sans-serif" font-size="52" font-weight="800" fill="#1A1A1A" text-anchor="middle" letter-spacing="-1">
+      CHEMODAN<tspan fill="#1A1A1A" font-weight="300">AV</tspan>
+    </text>
+  </g>
+</svg>

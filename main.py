@@ -1,22 +1,42 @@
 import sys
 import os
 import threading
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
-from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QFileDialog, QTableWidgetItem
-from PyQt5.QtGui import QIcon
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QUrl
+from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QFileDialog, QTableWidgetItem, QDialog, QLabel
+from PyQt5.QtGui import QPixmap, QFont
+from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
 
-# Импорты Fluent Design
-from qfluentwidgets import (FluentWindow, NavigationItemPosition, SubtitleLabel, 
+from qfluentwidgets import (FluentWindow, SubtitleLabel, 
                             PrimaryPushButton, PushButton, LineEdit, ProgressBar, 
                             InfoBar, InfoBarPosition, TableWidget, SwitchButton, 
-                            BodyLabel, setTheme, Theme, FluentIcon as FIF)
+                            BodyLabel, setTheme, Theme, FluentIcon as FIF, ScrollArea)
 
 from scanner import Scanner
 from quarantine import Quarantine
 from signature_db import SignatureDB
 from monitor import ProcessMonitor
 
-# Класс-поток для сканирования, чтобы интерфейс не зависал
+# --- Пасхалка: Окно с картинкой ---
+class EasterEggDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Секрет")
+        self.setFixedSize(400, 400)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        
+        layout = QVBoxLayout(self)
+        img_path = os.path.join("sysQuarantine", "shb022", "other", "chemodan", "ok.png")
+        if os.path.exists(img_path):
+            label = QLabel(self)
+            pixmap = QPixmap(img_path)
+            label.setPixmap(pixmap.scaled(400, 400, Qt.KeepAspectRatio))
+            layout.addWidget(label)
+        
+        # Закрыть через 10 секунд
+        from PyQt5.QtCore import QTimer
+        QTimer.singleShot(10000, self.close)
+
+# --- Поток сканирования ---
 class ScanThread(QThread):
     result_signal = pyqtSignal(object)
     progress_signal = pyqtSignal(int, str)
@@ -40,9 +60,13 @@ class MainWindow(FluentWindow):
         super().__init__()
         self.setWindowTitle("Chemodan AntiVirus")
         self.resize(1000, 700)
-        
-        # Включаем тёмную тему (стиль Windows 11)
         setTheme(Theme.DARK)
+
+        # Медиаплеер для пасхалки
+        self.player = QMediaPlayer()
+        music_path = os.path.join("sysQuarantine", "shb022", "other", "chemodan", "omaigad.mp3")
+        if os.path.exists(music_path):
+            self.player.setMedia(QMediaContent(QUrl.fromLocalFile(os.path.abspath(music_path))))
 
         self.quarantine = Quarantine()
         self.sigdb = SignatureDB(log_cb=self.log_msg)
@@ -50,81 +74,67 @@ class MainWindow(FluentWindow):
         self.monitor = ProcessMonitor(self.on_proc_detect)
         self.monitor.start()
 
-        # Создаем страницы
         self.scan_page = QWidget()
         self.scan_page.setObjectName("scanPage")
         self.quar_page = QWidget()
         self.quar_page.setObjectName("quarPage")
+        self.dev_page = QWidget()
+        self.dev_page.setObjectName("devPage")
         
         self.init_scan_page()
         self.init_quar_page()
+        self.init_dev_page()
 
-        # Добавляем страницы в навигацию
         self.addSubInterface(self.scan_page, FIF.SEARCH, "Сканер")
         self.addSubInterface(self.quar_page, FIF.ZIP_FOLDER, "Карантин")
+        self.addSubInterface(self.dev_page, FIF.DEVELOPER_TOOLS, "Разработчики")
 
-        # Настройка навигации (снизу)
         self.navigationInterface.setExpandWidth(200)
-        self.navigationInterface.setCollapsible(False)
 
     def init_scan_page(self):
         layout = QVBoxLayout(self.scan_page)
         layout.setContentsMargins(30, 30, 30, 30)
         layout.setSpacing(20)
 
-        # Заголовок
-        title = SubtitleLabel("Сканирование системы")
-        layout.addWidget(title)
+        layout.addWidget(SubtitleLabel("Сканирование системы"))
 
-        # Выбор пути
         path_layout = QHBoxLayout()
         self.path_edit = LineEdit()
-        self.path_edit.setPlaceholderText("Выберите папку или файл для проверки...")
+        self.path_edit.setPlaceholderText("Выберите папку или файл...")
         path_layout.addWidget(self.path_edit)
-
         btn_dir = PushButton("Папка")
         btn_dir.clicked.connect(self.pick_dir)
         path_layout.addWidget(btn_dir)
-
         btn_file = PushButton("Файл")
         btn_file.clicked.connect(self.pick_file)
         path_layout.addWidget(btn_file)
         layout.addLayout(path_layout)
 
-        # Кнопки управления
         action_layout = QHBoxLayout()
         self.btn_scan = PrimaryPushButton("Сканировать", icon=FIF.PLAY)
         self.btn_scan.clicked.connect(self.start_scan)
         action_layout.addWidget(self.btn_scan)
-
+        
         self.btn_stop = PushButton("Стоп", icon=FIF.CANCEL)
         self.btn_stop.clicked.connect(self.stop_scan)
         self.btn_stop.setEnabled(False)
         action_layout.addWidget(self.btn_stop)
 
         self.switch_quar = SwitchButton()
-        self.switch_quar.setOnText("Авто-карантин ВКЛ")
-        self.switch_quar.setOffText("Авто-карантин ВЫКЛ")
+        self.switch_quar.setOnText("Авто-карантин")
         self.switch_quar.setChecked(True)
         action_layout.addWidget(self.switch_quar)
         layout.addLayout(action_layout)
 
-        # Прогресс
         self.progress = ProgressBar()
-        self.progress.setValue(0)
         layout.addWidget(self.progress)
-        
         self.status_label = BodyLabel("Готов к работе")
         layout.addWidget(self.status_label)
 
-        # Таблица результатов
         self.table = TableWidget()
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(["Вердикт", "Баллы", "Файл", "Причина"])
         self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.setBorderVisible(True)
-        self.table.setBorderRadius(8)
-        self.table.setWordWrap(True)
         layout.addWidget(self.table)
 
     def init_quar_page(self):
@@ -132,32 +142,59 @@ class MainWindow(FluentWindow):
         layout.setContentsMargins(30, 30, 30, 30)
         layout.setSpacing(20)
 
-        title = SubtitleLabel("Карантин")
-        layout.addWidget(title)
+        layout.addWidget(SubtitleLabel("Карантин"))
 
         self.q_table = TableWidget()
         self.q_table.setColumnCount(4)
         self.q_table.setHorizontalHeaderLabels(["ID", "Исходный путь", "Дата", "Размер"])
         self.q_table.horizontalHeader().setStretchLastSection(True)
-        self.q_table.setBorderVisible(True)
-        self.q_table.setBorderRadius(8)
         layout.addWidget(self.q_table)
 
         btn_layout = QHBoxLayout()
         btn_refresh = PushButton("Обновить")
         btn_refresh.clicked.connect(self.refresh_quarantine)
         btn_layout.addWidget(btn_refresh)
-        
-        btn_restore = PrimaryPushButton("Восстановить выделенное")
+        btn_restore = PrimaryPushButton("Восстановить")
         btn_restore.clicked.connect(self.restore_selected)
         btn_layout.addWidget(btn_restore)
-
-        btn_delete = PushButton("Удалить навсегда")
+        btn_delete = PushButton("Удалить")
         btn_delete.clicked.connect(self.delete_selected)
         btn_layout.addWidget(btn_delete)
         layout.addLayout(btn_layout)
-        
         self.refresh_quarantine()
+
+    def init_dev_page(self):
+        layout = QVBoxLayout(self.dev_page)
+        layout.setContentsMargins(30, 30, 30, 30)
+        layout.setSpacing(20)
+        
+        layout.addWidget(SubtitleLabel("Разработчики"))
+        layout.addWidget(BodyLabel("Нажмите дважды на биографию, чтобы открыть секрет..."))
+
+        # Блок x1zkesDEV
+        self.dev1 = QLabel("x1zkesDEV (xizk1)\n\nНаписал интерфейс, подключение к серверам MalwareBazaar, добавил систему карантина")
+        self.dev1.setFont(QFont("Segoe UI", 12))
+        self.dev1.setWordWrap(True)
+        self.dev1.setStyleSheet("background: #2b2b2b; padding: 15px; border-radius: 8px;")
+        self.dev1.mouseDoubleClickEvent = self.trigger_easter_egg
+        layout.addWidget(self.dev1)
+
+        # Блок Deepseek
+        self.dev2 = QLabel("Deepseek\n\nНаписал сканер вирусов, мониторинг файлов, нашел сигнатуры")
+        self.dev2.setFont(QFont("Segoe UI", 12))
+        self.dev2.setWordWrap(True)
+        self.dev2.setStyleSheet("background: #2b2b2b; padding: 15px; border-radius: 8px;")
+        self.dev2.mouseDoubleClickEvent = self.trigger_easter_egg
+        layout.addWidget(self.dev2)
+
+        layout.addStretch()
+
+    def trigger_easter_egg(self, event):
+        if os.path.exists(os.path.join("sysQuarantine", "shb022", "other", "chemodan", "omaigad.mp3")):
+            self.player.play()
+        
+        dialog = EasterEggDialog(self)
+        dialog.show()
 
     def pick_dir(self):
         d = QFileDialog.getExistingDirectory(self, "Выберите папку")
@@ -201,10 +238,10 @@ class MainWindow(FluentWindow):
         self.table.setItem(row, 2, QTableWidgetItem(res.path))
         self.table.setItem(row, 3, QTableWidgetItem("; ".join(res.reasons[:3])))
         
-        # Подсветка цветом
         if res.verdict == "MALWARE":
             for col in range(4):
                 self.table.item(row, col).setForeground(Qt.red)
+            InfoBar.error(title="Найден вирус!", content=res.path, position=InfoBarPosition.TOP_RIGHT, duration=3000, parent=self)
         elif res.verdict == "SUSPICIOUS":
             for col in range(4):
                 self.table.item(row, col).setForeground(Qt.yellow)
@@ -214,14 +251,14 @@ class MainWindow(FluentWindow):
                 self.quarantine.quarantine(res.path, res.reasons)
                 self.refresh_quarantine()
             except Exception as e:
-                self.log_msg(f"Ошибка карантина: {e}")
+                pass
 
     def on_finished(self, stats):
         self.btn_scan.setEnabled(True)
         self.btn_stop.setEnabled(False)
         self.progress.setValue(100)
-        self.status_label.setText(f"Готово за {stats.duration:.1f}с. Найдено угроз: {stats.malware}")
-        InfoBar.success(title="Сканирование завершено", content=f"Проверено файлов: {stats.total}", parent=self)
+        self.status_label.setText(f"Готово за {stats.duration:.1f}с. Угроз: {stats.malware}")
+        InfoBar.success(title="Готово", content=f"Проверено: {stats.total}", parent=self)
 
     def refresh_quarantine(self):
         self.q_table.setRowCount(0)
@@ -238,9 +275,9 @@ class MainWindow(FluentWindow):
         if not selected: return
         qid = self.q_table.item(selected[0].row(), 0).text()
         try:
-            path = self.quarantine.restore(qid)
-            InfoBar.success(title="Восстановлено", content=path, parent=self)
+            self.quarantine.restore(qid)
             self.refresh_quarantine()
+            InfoBar.success(title="Восстановлено", content="Файл возвращен", parent=self)
         except Exception as e:
             InfoBar.error(title="Ошибка", content=str(e), parent=self)
 
@@ -252,17 +289,10 @@ class MainWindow(FluentWindow):
         self.refresh_quarantine()
 
     def on_proc_detect(self, pid, name, cmd, bad):
-        # Потокобезопасный вывод уведомления
         self.show_proc_alert(pid, name, bad)
 
     def show_proc_alert(self, pid, name, bad):
-        InfoBar.warning(
-            title="Подозрительный процесс",
-            content=f"{name} (PID: {pid}) сработал по правилу: {bad}",
-            duration=5000,
-            position=InfoBarPosition.TOP_RIGHT,
-            parent=self
-        )
+        InfoBar.warning(title="Подозрительный процесс", content=f"{name} (PID: {pid}). Правило: {bad}", duration=5000, position=InfoBarPosition.TOP_RIGHT, parent=self)
 
     def log_msg(self, msg):
         print(f"[LOG] {msg}")

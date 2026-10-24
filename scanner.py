@@ -2,11 +2,8 @@ import os
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
-from signatures import (
-    sha256_file, scan_bytes, DANGEROUS_EXT, DOUBLE_EXT_RE
-)
+from signatures import sha256_file, scan_bytes, DANGEROUS_EXT, DOUBLE_EXT_RE
 from signature_db import SignatureDB
-
 
 @dataclass
 class ScanResult:
@@ -15,7 +12,6 @@ class ScanResult:
     score: int = 0
     reasons: list = field(default_factory=list)
     sha256: str = ""
-
 
 @dataclass
 class ScanStats:
@@ -30,7 +26,6 @@ class ScanStats:
     @property
     def duration(self):
         return self.end_time - self.start_time
-
 
 class Scanner:
     MAX_FILE_SIZE = 64 * 1024 * 1024
@@ -49,6 +44,12 @@ class Scanner:
     def scan_file(self, path: str) -> ScanResult:
         res = ScanResult(path=path, verdict="CLEAN")
         try:
+            # Игнорируем исходники Python, чтобы не жрать самого себя
+            if path.endswith(".py") or path.endswith(".spec"):
+                res.verdict = "CLEAN"
+                self.stats.clean += 1
+                return res
+
             size = os.path.getsize(path)
             ext = os.path.splitext(path)[1].lower()
 
@@ -116,11 +117,16 @@ class Scanner:
         if os.path.isfile(root):
             files = [root]
         else:
+            # Исключаем папку с самим антивирусом и системный мусор
             skip = {"$Recycle.Bin", "System Volume Information", "Windows",
-                    "node_modules", ".git", "__pycache__", "data", "quarantine"}
+                    "node_modules", ".git", "__pycache__", "data", "quarantine",
+                    "ChemodanAntiVirus", "dist", "build"}
+            
             for dirpath, dirnames, filenames in os.walk(root):
                 dirnames[:] = [d for d in dirnames if d not in skip]
                 for fn in filenames:
+                    if fn.endswith((".py", ".spec", ".md", ".json", ".txt")):
+                        continue # Пропускаем текстовые файлы и код
                     files.append(os.path.join(dirpath, fn))
 
         self.stats.total = len(files)

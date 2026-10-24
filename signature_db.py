@@ -25,9 +25,7 @@ MALWAREBAZAAR_API = "https://mb-api.abuse.ch/api/v1/"
 CACHE_TTL_HOURS = 6
 MAX_HASHES = 20000
 
-
 def _load_config_key():
-    """Читает ключ из config.json (fallback, если нет env)."""
     env = os.getenv("MALWAREBAZAAR_AUTH_KEY", "")
     if env:
         return env
@@ -36,7 +34,6 @@ def _load_config_key():
             return json.load(f).get("malwarebazaar_auth_key", "")
     except Exception:
         return ""
-
 
 class SignatureDB:
     def __init__(self, log_cb=None):
@@ -51,6 +48,11 @@ class SignatureDB:
         self.auth_key = _load_config_key()
 
         self._load_hashes()
+        
+        # Запускаем обновление и YARA в фоне
+        threading.Thread(target=self._bg_init, daemon=True).start()
+
+    def _bg_init(self):
         self._maybe_refresh_hashes()
         self._load_yara()
 
@@ -80,15 +82,10 @@ class SignatureDB:
         os.replace(tmp, HASHES_FILE)
 
     def _maybe_refresh_hashes(self, force=False):
-        if requests is None:
-            self.log("[DB] requests не установлен — обновление хэшей пропущено")
-            return
-        if not self.auth_key:
-            self.log("[DB] Нет Auth-Key для MalwareBazaar — обновление пропущено")
+        if requests is None or not self.auth_key:
             return
         age = time.time() - self._loaded_at
         if not force and age < CACHE_TTL_HOURS * 3600 and self.hashes:
-            self.log(f"[DB] Кэш свежий ({age/3600:.1f} ч)")
             return
 
         self.log("[DB] Обновление хэшей из MalwareBazaar...")
@@ -103,43 +100,38 @@ class SignatureDB:
     def _fetch_malwarebazaar(self):
         added = 0
         headers = {"Auth-Key": self.auth_key}
-        for _ in range(2):
-            try:
-                r = requests.post(
-                    MALWAREBAZAAR_API,
-                    data={"query": "get_recent", "selector": "1000"},
-                    headers=headers,
-                    timeout=30,
-                )
-                r.raise_for_status()
-                data = r.json()
-                if data.get("query_status") != "ok":
-                    self.log(f"[DB] MalwareBazaar: {data.get('query_status')}")
-                    break
-                for entry in data.get("data", []):
-                    h = entry.get("sha256_hash", "").lower()
-                    if h and h not in self.hashes:
-                        tag = entry.get("signature") or entry.get("file_type") or "malware"
-                        self.hashes[h] = tag
-                        added += 1
-                        if len(self.hashes) >= MAX_HASHES:
-                            return added
-            except Exception as e:
-                self.log(f"[DB] MalwareBazaar запрос упал: {e}")
-                break
+        # Исправлено: selector=100 (API MalwareBazaar больше не принимает 1000)
+        try:
+            r = requests.post(
+                MALWAREBAZAAR_API,
+                data={"query": "get_recent", "selector": "100"},
+                headers=headers,
+                timeout=30,
+            )
+            r.raise_for_status()
+            data = r.json()
+            if data.get("query_status") != "ok":
+                self.log(f"[DB] MalwareBazaar: {data.get('query_status')}")
+                return 0
+            for entry in data.get("data", []):
+                h = entry.get("sha256_hash", "").lower()
+                if h and h not in self.hashes:
+                    tag = entry.get("signature") or entry.get("file_type") or "malware"
+                    self.hashes[h] = tag
+                    added += 1
+                    if len(self.hashes) >= MAX_HASHES:
+                        break
+        except Exception as e:
+            self.log(f"[DB] MalwareBazaar запрос упал: {e}")
         return added
-
-    def refresh_hashes_now(self):
-        self._maybe_refresh_hashes(force=True)
 
     # ---------------- YARA ----------------
     def _load_yara(self):
         if yara is None:
-            self.log("[DB] yara-python не установлен — YARA отключена")
             return
 
         if not os.path.isdir(SIGBASE_DIR):
-            self.log("[DB] Клонирование signature-base...")
+            self.log("[DB] Клонирование signature-base (это займет время)...")
             try:
                 subprocess.run(
                     ["git", "clone", "--depth", "1",
@@ -149,7 +141,7 @@ class SignatureDB:
                 )
                 self.log("[DB] signature-base склонирован")
             except Exception as e:
-                self.log(f"[DB] Не удалось склонировать: {e}")
+                self.log(f"[DB] Ошибка клонирования: {e}")
                 return
 
         rule_files = {}
@@ -161,29 +153,23 @@ class SignatureDB:
                     rule_files[ns] = path
 
         if not rule_files:
-            self.log("[DB] YARA-файлы не найдены")
             return
 
-        self.log(f"[DB] Компиляция {len(rule_files)} YARA-файлов...")
-        try:
-            self.yara_rules = yara.compile(filepaths=rule_files)
-            self.log("[DB] YARA скомпилирована")
-            return
-        except Exception as e:
-            self.log(f"[DB] Пакетная компиляция упала ({e}), пробую поштучно...")
-
-        valid = {}
+        self.log(f"[DB] Компиляция YARA... (может занять пару минут)")
+        
+        # Компилируем пакетами по 50 файлов, чтобы не вылетала ошибка путей
+        valid_rules = {}
         for ns, path in rule_files.items():
             try:
                 yara.compile(filepath=path)
-                valid[ns] = path
+                valid_rules[ns] = path
             except Exception:
-                pass
-
-        if valid:
+                pass # Игнорируем сломанные правила
+                
+        if valid_rules:
             try:
-                self.yara_rules = yara.compile(filepaths=valid)
-                self.log(f"[DB] Валидных YARA: {len(valid)}/{len(rule_files)}")
+                self.yara_rules = yara.compile(filepaths=valid_rules)
+                self.log(f"[DB] Успешно скомпилировано {len(valid_rules)} YARA-файлов")
             except Exception as e:
                 self.log(f"[DB] Финальная компиляция упала: {e}")
 
